@@ -2,7 +2,7 @@
 ############### Section 4.2: Fixed-width latent-process DRW models
 
 options(digits = 11)
-setwd("~/Desktop/yasaman/")
+setwd("~/Desktop/")
 dat.h <- read.table("ha.txt", skip = 1, sep = "", header = FALSE)
 dat.c <- read.table("cont.txt", skip = 1, sep = "", header = FALSE)
 
