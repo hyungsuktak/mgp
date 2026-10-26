@@ -1,1 +1,1 @@
-This repository contains two R scripts: mGP1.R for reproducing the results in Section 4.1, and mGP2.R for reproducing the results in Section 4.2.
+This repository contains the data and R/Python codes to reproduce the results in Sections 4.1 and 4.2.
