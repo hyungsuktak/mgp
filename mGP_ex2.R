@@ -405,159 +405,7 @@ compare_best_starts <- function(fit_object, n = 10L) {
              difference_from_best = vals - min(vals))
 }
 
-############### Conditional prediction
-
-predict_rm_fixed <- function(fit_or_par, type = c("TH", "G"),
-                             t_grid, nq = 41L,
-                             width_TH = fixed_width_TH,
-                             width_G = fixed_width_G,
-                             jitter = 1e-8) {
-  type <- match.arg(type)
-  par <- if (is.list(fit_or_par) && !is.null(fit_or_par$estimates)) {
-    fit_or_par$estimates
-  } else fit_or_par
-
-  width <- if ("width" %in% names(par)) unname(par["width"]) else
-    if (type == "TH") width_TH else width_G
-
-  q <- quad_rule(type, unname(par["tau0"]), width, nq)
-  u <- q$u; weights <- q$weights
-  shifted_line <- shifted_times(tl, u)
-  W_line <- make_W(nl, weights)
-
-  sigma <- unname(par["sigma"])
-  tau <- unname(par["tau"])
-  alpha <- unname(par["alpha"])
-
-  Kcc <- K_drw(tc, tc, sigma, tau)
-  Kcl <- alpha * K_drw(tc, shifted_line, sigma, tau) %*% t(W_line)
-  Kll <- alpha^2 * W_line %*%
-    K_drw(shifted_line, shifted_line, sigma, tau) %*% t(W_line)
-  Kobs <- rbind(cbind(Kcc, Kcl), cbind(t(Kcl), Kll))
-  diag(Kobs) <- diag(Kobs) + c(ec^2, el^2) + jitter
-
-  mean_obs <- c(rep(unname(par["mu_c"]), nc), rep(unname(par["mu_l"]), nl))
-  R <- chol(Kobs)
-  Kinv_res <- backsolve(R, forwardsolve(t(R), y - mean_obs))
-
-  Kstar_c <- cbind(
-    K_drw(t_grid, tc, sigma, tau),
-    alpha * K_drw(t_grid, shifted_line, sigma, tau) %*% t(W_line)
-  )
-  continuum_mean <- as.numeric(unname(par["mu_c"]) + Kstar_c %*% Kinv_res)
-  Vc <- forwardsolve(t(R), t(Kstar_c))
-  continuum_var <- pmax(sigma^2 * tau / 2 - colSums(Vc^2), 0)
-
-  shifted_grid <- shifted_times(t_grid, u)
-  W_grid <- make_W(length(t_grid), weights)
-  Kstar_l_cont <- alpha * W_grid %*% K_drw(shifted_grid, tc, sigma, tau)
-  Kstar_l_line <- alpha^2 * W_grid %*%
-    K_drw(shifted_grid, shifted_line, sigma, tau) %*% t(W_line)
-  Kstar_l <- cbind(Kstar_l_cont, Kstar_l_line)
-  line_mean <- as.numeric(unname(par["mu_l"]) + Kstar_l %*% Kinv_res)
-  Vl <- forwardsolve(t(R), t(Kstar_l))
-  Kuu <- K_drw(u, u, sigma, tau)
-  line_prior_var <- as.numeric(alpha^2 * t(weights) %*% Kuu %*% weights)
-  line_var <- pmax(line_prior_var - colSums(Vl^2), 0)
-
-  list(
-    time = t_grid,
-    continuum_mean = continuum_mean,
-    continuum_sd = sqrt(continuum_var),
-    line_mean = line_mean,
-    line_sd = sqrt(line_var)
-  )
-}
-
-############### Figure 5: transfer functions
-
-plot_transfer_functions <- function(fit_TH, fit_G, outfile = NULL,
-                                    ngrid = 2000L, xlim = NULL) {
-  par_TH <- if (is.list(fit_TH)) fit_TH$estimates else fit_TH
-  par_G <- if (is.list(fit_G)) fit_G$estimates else fit_G
-  tau_TH <- unname(par_TH["tau0"]); w_TH <- unname(par_TH["width"])
-  tau_G <- unname(par_G["tau0"]); omega_G <- unname(par_G["width"])
-
-  u_TH <- seq(tau_TH - 0.8 * w_TH, tau_TH + 0.8 * w_TH, length.out = ngrid)
-  psi_TH <- ifelse(abs(u_TH - tau_TH) <= w_TH / 2, 1 / w_TH, 0)
-  psi_TH <- psi_TH / max(psi_TH)
-  u_G <- seq(tau_G - 4 * omega_G, tau_G + 4 * omega_G, length.out = ngrid)
-  psi_G <- dnorm(u_G, tau_G, omega_G); psi_G <- psi_G / max(psi_G)
-  if (is.null(xlim)) xlim <- range(c(u_TH, u_G))
-
-  if (!is.null(outfile)) { pdf(outfile, 7.2, 7.2); on.exit(dev.off(), add = TRUE) }
-  old <- par(no.readonly = TRUE); on.exit(par(old), add = TRUE)
-  par(mfrow = c(2, 1), mar = c(4.2, 4.3, 2.2, 1))
-
-  plot(u_TH, psi_TH, type = "l", lwd = 2, xlim = c(115, 165), ylim = c(0, 1.05),
-       xlab = "", ylab = "",
-       main = "Top-hat response")
-  abline(v = tau_TH, lty = 3)
-  mtext("Lag (days)", side = 1, line = 2, cex = 1.1)
-  mtext(expression(Psi(u) / max(Psi(u))), side = 2, line = 2, cex = 1.1)
-
-  legend("topright", c(sprintf("Lag = %.2f days", tau_TH),
-                       sprintf("Width = %.2f days", w_TH)), bty = "n")
-
-  plot(u_G, psi_G, type = "l", lwd = 2, xlim = c(115, 165), ylim = c(0, 1.05),
-       xlab = "", ylab = "",
-       main = "")
-  title("Gaussian response")
-  mtext("Lag (days)", side = 1, line = 2, cex = 1.1)
-  mtext(expression(Psi(u) / max(Psi(u))), side = 2, line = 2, cex = 1.1)
-  abline(v = tau_G, lty = 3)
-  legend("topright", c(sprintf("Lag = %.2f days", tau_G),
-                       sprintf("SD = %.2f days", omega_G)), bty = "n")
-}
-
-############### Figure 6: conditional H-alpha reconstructions
-
-plot_line_reconstructions <- function(fit_TH, fit_G, outfile = NULL,
-                                      nq = 41L, ngrid = 800L,
-                                      xlim = range(c(tc, tl))) {
-  par_TH <- if (is.list(fit_TH)) fit_TH$estimates else fit_TH
-  par_G <- if (is.list(fit_G)) fit_G$estimates else fit_G
-  t_grid <- seq(xlim[1], xlim[2], length.out = ngrid)
-  pred_TH <- predict_rm_fixed(par_TH, "TH", t_grid, nq)
-  pred_G <- predict_rm_fixed(par_G, "G", t_grid, nq)
-
-  ylim_line <- range(
-    yl - el, yl + el,
-    pred_TH$line_mean - 1.96 * pred_TH$line_sd,
-    pred_TH$line_mean + 1.96 * pred_TH$line_sd,
-    pred_G$line_mean - 1.96 * pred_G$line_sd,
-    pred_G$line_mean + 1.96 * pred_G$line_sd,
-    finite = TRUE
-  )
-
-  if (!is.null(outfile)) { pdf(outfile, 8, 7); on.exit(dev.off(), add = TRUE) }
-  old <- par(no.readonly = TRUE); on.exit(par(old), add = TRUE)
-  par(mfrow = c(2, 1), mar = c(4, 4.3, 2.2, 1))
-
-  draw_panel <- function(pred, title_text) {
-    plot(tl, yl, type = "n", xlim = xlim, ylim = ylim_line,
-         xlab = "",
-         ylab = "", main = title_text)
-    mtext("Observation time (MJD)", side = 1, line = 2, cex = 1.1)
-    mtext(expression(H * alpha ~ "flux"), side = 2, line = 2, cex = 1.1)
-    polygon(c(pred$time, rev(pred$time)),
-            c(pred$line_mean - 1.96 * pred$line_sd,
-              rev(pred$line_mean + 1.96 * pred$line_sd)),
-            border = NA, col = adjustcolor("gray75", alpha.f = 0.45))
-    arrows(tl, yl - el, tl, yl + el, angle = 90, code = 3,
-           length = 0.015, col = "gray60")
-    points(tl, yl, pch = 16, cex = 0.65)
-    lines(pred$time, pred$line_mean, lwd = 2)
-  }
-
-  draw_panel(pred_TH, sprintf("Top-hat: lag = %.2f d, width = %.2f d",
-                              par_TH["tau0"], par_TH["width"]))
-  draw_panel(pred_G, sprintf("Gaussian: lag = %.2f d, SD = %.2f d",
-                             par_G["tau0"], par_G["width"]))
-  invisible(list(top_hat = pred_TH, gaussian = pred_G))
-}
-
-############### Figure 7: frequency responses and filtered PSD ratio
+############### Figure 5: frequency responses and filtered PSD ratio
 
 sinc_safe <- function(x) {
   out <- rep(1, length(x)); idx <- abs(x) > 1e-12
@@ -617,19 +465,28 @@ plot_frequency_domain <- function(fit_TH, fit_G, outfile = NULL,
   ))
 }
 
-############### Test fit
+############### CPU time evaluation
 
-fit_TH_test <- fit_one_fixed("TH", nstart = 1, nq = 15, final_nq = 21,
-                             ncores = min(3L, ncores_default),
-                             maxit = 300, final_maxit = 800)
+bench_nll <- function(type, par, nq = 41L,
+                      nrep = 10L, batch = 5L) {
 
-fit_TH_test$estimates
+  # Warm up
+  invisible(neg_loglik_fixed(par, type = type, nq = nq))
 
-fit_G_test <- fit_one_fixed("G", nstart = 1, nq = 15, final_nq = 21,
-                            ncores = min(3L, ncores_default),
-                            maxit = 300, final_maxit = 800)
+  times <- replicate(nrep, {
+    elapsed <- system.time({
+      for (i in seq_len(batch)) {
+        neg_loglik_fixed(par, type = type, nq = nq)
+      }
+    })["elapsed"]
 
-fit_G_test$estimates
+    unname(elapsed) / batch
+  })
+
+  c(mean = mean(times),
+    sd = sd(times),
+    median = median(times))
+}
 
 ############### Fit
 
@@ -651,9 +508,14 @@ compare_best_starts(fit_G_fixed)
 
 ############### Figures
 
-plot_transfer_functions(fit_TH_fixed, fit_G_fixed)
-
 frequency_results <- plot_frequency_domain(
   fit_TH_fixed, fit_G_fixed,
   omega_max = 2
 )
+
+############### CPU time for the likelihood evluations
+
+bench_TH <- bench_nll("TH", fit_TH_fixed$fit$par, nrep = 1e3)
+bench_G  <- bench_nll("G", fit_G_fixed$fit$par, nrep = 1e3)
+
+rbind(Top_hat = bench_TH, Gaussian = bench_G)
